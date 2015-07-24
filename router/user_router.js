@@ -6,7 +6,7 @@
 //
 //PUT /users/:user (rename a user and user's bucket) - done
 //
-//DELETE /users/:user
+//DELETE /users/:user - done
 //
 //GET /user/:user/files - done
 //
@@ -151,6 +151,41 @@ module.exports = function(router) {
 	})
 	.delete(function(req, res) {
 	// delete a user and his folder and all his files
+		User.remove({name: req.params.user}, function(err, data) {
+			if (err) {
+				res.status(500).json({msg: 'server error, couldn\'t delete user'});
+			}
+			else {
+					var params = {
+					Bucket: bucketName,
+					Prefix: req.params.user};
+					s3.listObjects(params, function(err, data) {
+						if (err) {
+							console.log(err, err.stack)
+						}
+						else {
+							var allFiles = data.Contents;
+							var deleteArray = [];
+							allFiles.forEach(function(file) {
+							var deleteParams = {
+								Bucket: bucketName,
+								Key: file.Key
+							}
+							s3.deleteObject(deleteParams, function(err, data) {
+								if (err) {
+									console.log('couldn\'t delete user folder from aws');
+									res.status(500).json({msg: 'server error. couldn\'t delete user'});
+								}
+								else {
+									console.log('deleted user folder from aws');
+									res.json({msg: 'user/user folder/files are all deleted'});
+								}
+							})
+						})
+					}
+				})
+			}
+		});
 	});
 	
 	router.route('/users/:user/files')
@@ -212,6 +247,19 @@ module.exports = function(router) {
 				res.json({msg: 'File is saved'});
 			}
 		})
+	})
+	.delete(function(req, res) {
+		User.update({name: req.params.user}, {$set:{file: []}}, function(err, user) {
+			if (err) {
+				res.status(500).json({msg: 'server error'});
+			} 
+			else if (!user) {
+				res.send({msg:'couldn\'t find user'});
+			}
+			else {
+				
+				
+			}
 	})
 
 //	router.route('/users/:user/files/:file')
