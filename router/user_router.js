@@ -29,7 +29,8 @@ var User = require('../model/user.js');
 var File = require('../model/file.js');
 var AWS = require('aws-sdk');
 
-var bucketName = '55b13a28b651c557054eb832';
+// because everyone is going to share the same bucket, this is hardcoded here
+var bucketName = process.env.Bucket || '55b13a28b651c557054eb832';
 
 var s3 = new AWS.S3();
 
@@ -43,8 +44,7 @@ module.exports = function(router) {
 		// display all users
 		User.find({}, function(err, users) {
 			if (err) {
-				console.log(err);
-				res.status(500).json({msg: 'server error'});
+				res.json(errorHandler(err)('load users'));
 			}
 			else {
 				res.json(users);
@@ -56,23 +56,10 @@ module.exports = function(router) {
 		var user = new User(req.body); 	
 		user.save(function(err, userData) {
 			if(err) { 
-				console.log(err);
-				res.status(500).json({msg: 'server error'});
+				res.json(errorHandler(err)('create user. user already exist'));
 			}
 			else {
-				res.json({msg: 'User created'});
-//	  		console.log('try to create bucket');
-//				s3.createBucket({Bucket: userData._id}, function (error, data){
-//					if (error) {
-//						console.log(bucketName/req.body.name);
-//						console.log(error);
-//						res.status(500);
-//						res.json({msg: 'Couldn\'t create bucket'});
-//					}
-//					else {
-//						res.json({msg: 'User created'});
-//					}
-//				});
+				res.json({msg: 'user is created'});
 			}		
 		});	
 	});
@@ -80,186 +67,173 @@ module.exports = function(router) {
 	router.route('/users/:user/') 
 	// get all information about a user
 	.get(function(req, res) {
-		User.findOne({name: req.params.user})
-			.populate('file')
-			.exec(function(err, user) { 
-				if (err) {
-					res.status(500).json({msg: 'server error'});
-				} 
-				res.json(user);
-			})
-		})
+		fetchUser(req, res, function(err, user) {
+			res.json(user);
+		});
+	})
 	.put(function(req, res) {	
 	// update a user's name and update his online folder name
 		var oldUserName = req.params.user,
 				newUserName = req.body.name;	
-		User.update({name: oldUserName}, {$set:{name: newUserName}}, function(err, user) {
-			if (err) {
-				res.status(500).json({msg: 'server error'});
-			} 
-			else if (!user) {
-				res.send({msg:'couldn\'t find user'});
-			}
-			else {
-				var params = {
-									Bucket: bucketName,
-									Prefix: oldUserName};
-				s3.listObjects(params, function(err, data) {
-					if (err) {
-						console.log(err, err.stack)
-					}
-					else {
-						var allFiles = data.Contents;
-						allFiles.forEach(function(file) {
-							var oldParams = {
-									Bucket: bucketName,
-									Key: file.Key,
-									CopySource: bucketName + '/' + file.Key,
-									MetadataDirective: 'REPLACE'
-							};
-							var newParams = {
-									Bucket: bucketName,
-									Key: newUserName + '/' + file.Key.split('/').pop()
-							}
-							s3.copyObject(oldParams, function(err, data) {
-								if(err) console.log(err);
-								else {
-									s3.putObject(newParams, function(err, data) {
-										if(err) return console.log(err);
-										else {
-										console.log('folder successfully copied');
-										var deleteParams = {
-													Bucket: bucketName,
-													Key: file.Key};
-										s3.deleteObject(deleteParams, function(err, data) {
-											if(err) {
-												console.log('couldn\'t delete the old file', err);
-												}
+		fetchUser(req, res, function(err, user) {
+			user.name = newUserName;
+			user.save();
+			returnAwsFilesByUser(oldUserName, function(error, data) {
+				if(error) {
+					res.json(errorHandler(err)('update user name'));
+				} 
+				else{ 
+					var fileCompleted = 0; 
+					var total = data.length; // need to cash data.length here because there is another 'data' variable in callback scope
+					var urlParams, AWSurl;
+					data.forEach(function(file) {
+						var oldParams = new setCopyParams(bucketName, file);
+						var fileName = file.Key.split('/').pop();
+						var newParams = new setParams(bucketName, newUserName + '/' + fileName);
+						var deleteParams = new setDelteParams(bucketName, file);
+						copy_put_delete_AwsFile(oldParams, newParams, deleteParams, function(er, data) {
+							if (er) {
+								res.json(errorHandler(err)('update user name'));
+							} else {
+								urlParams = new setUrlParams(bucketName, newUserName + '/' + fileName);
+								AWSurl = s3.getSignedUrl('getObject', urlParams);
+//								console.log(user.file);
+//								console.log(AWSurl);
+								for (var i = 0; i < user.file.length; i++) {
+									var fileToUpdate = user.file[i];
+//									console.log(fileToUpdate, fileName);
+									if (fileToUpdate.name === fileName) {
+//										console.log(user.file._id);
+										File.update({_id: fileToUpdate._id}, {$set: {url: AWSurl}}, function(err, data) {
+											if(err) errorHandler(err)('update file url');
 											else {
-													res.send({msg:'user name and folder successflly updated'});
-												}
-											})
-										}
-									})
+												fileCompleted ++;
+												if (fileCompleted === total) res.json({msg:'user name and file update completed'});
+											}
+										});
+										break; // file name uniqiue to each user
+									}
 								}
-							})
-						});
-					};           
-				});
-			}
-		});
+							}
+						})
+					})
+				}
+			})
+		})
 	})
+//		User.update({name: oldUserName}, {$set:{name: newUserName}}, function(err, user) {
+//			if (err) {
+//				res.json(errorHandler(err)('update user'));
+//			} 
+//		
+//			else {
+//				returnAwsFilesByUser(oldUserName, function(error, data) {
+//					if(error) {
+//						res.json(errorHandler(err)('update user name'));
+//					} 
+//					else{ 
+//						var fileCompleted = 0; 
+//						// have to implement a total count to dictate when to send response message. because there is a loop here, if the res.json is put within the last call back , the first file completed will trigger res.json, and the following will have an error: couldn't set header when response is send
+//						var total = data.length; // need to cash data.length here because there is another 'data' variable in callback scope
+//						data.forEach(function(file) {
+//							var oldParams = new setCopyParams(bucketName, file);
+//							var newParams = new setParams(bucketName, newUserName + '/' + file.Key.split('/').pop());
+//							var deleteParams = new setDelteParams(bucketName, file);
+//							copy_put_delete_AwsFile(oldParams, newParams, deleteParams, function(er, data) {
+//								if (er) {
+//									res.json(errorHandler(err)('update user name'));
+//								} else {
+//									fileCompleted ++;
+////									var urlParams = new setUrlParams(bucketName, user.name + '/' + req.body.fileName);
+////									var AWSurl = s3.getSignedUrl('getObject', urlParams);
+////									var newFile = new File({name: req.body.fileName, url: AWSurl});
+////									newFile.save(function(error, data) {
+//									if (fileCompleted === total) res.json({msg:'user name and file update completed'});	
+//								}
+//							});
+//						});
+//					}
+//				})
+//			}
+//		})
+//	})
 	.delete(function(req, res) {
 	// delete a user and his folder and all his files
-		User.remove({name: req.params.user}, function(err, data) {
+		User.remove({name: req.params.user}, function(err, user) {
 			if (err) {
-				res.status(500).json({msg: 'server error, couldn\'t delete user'});
+				res.json(errorHandler(err)('delete user'));
 			}
 			else {
-					var params = {
-					Bucket: bucketName,
-					Prefix: req.params.user};
-					s3.listObjects(params, function(err, data) {
-						if (err) {
-							console.log(err, err.stack)
-						}
-						else {
-							var allFiles = data.Contents;
-							var deleteArray = [];
-							allFiles.forEach(function(file) {
-							var deleteParams = {
-								Bucket: bucketName,
-								Key: file.Key
-							}
+				returnAwsFilesByUser(req.params.user, function(err, data) {
+					if(err) {
+						res.json(errorHandler(err)('delete user'));
+					} else {
+						var fileCompleted = 0;
+						var total = data.length;
+						data.forEach(function(file) {
+						var deleteParams = new setDelteParams(bucketName, file);
 							s3.deleteObject(deleteParams, function(err, data) {
-								if (err) {
-									console.log('couldn\'t delete user folder from aws');
-									res.status(500).json({msg: 'server error. couldn\'t delete user'});
-								}
-								else {
-									console.log('deleted user folder from aws');
-									res.json({msg: 'user/user folder/files are all deleted'});
-								}
+								if(err) return console.log('couldn\'t delete the file', err);
+								console.log('user folder is deleted from aws');
+								fileCompleted ++;
+								if (fileCompleted === total) res.json({msg: 'user/user folder/files are all deleted'});
 							})
 						})
 					}
 				})
 			}
-		});
-	});
+		})
+	})
+
 	
 	router.route('/users/:user/files')
 	.get(function(req, res) {
-		User.findOne({name: req.params.user})
-			.populate('file')
-			.exec(function(err, user) { 
-				if (err) {
-					res.status(500).json({msg: 'server error'});
-				} 
-				var fileOutput = {};
-				user.file.forEach(function(one) {
-					fileOutput[one.name] = one.url;
-				})
-				res.json({name: user.name, file: fileOutput});
+		fetchUser(req, res, function(err, user) {
+			var fileOutput = {};
+			user.file.forEach(function(one) {
+				fileOutput[one.name] = one.url;
 			})
+			res.json({name: user.name, file: fileOutput});
+		})
 	})
 	.post(function(req, res) {
-		User.findOne({name: req.params.user})
-		.exec(function(err, user) { 
-			if (err) {
-				res.status(500).json({msg: 'server error'});
-			} 
-			else {
-				console.log(user);
-				var params = {Bucket: bucketName,
-											Key: user.name + '/' + req.body.fileName,
-							 				Body: req.body.content};
-				s3.putObject(params, function(error, data) {
-				 if (error) {
-					 console.log(error);
-					 res.status(500);
-					 res.json({msg: 'Couldn\'t upload the file'});
-				 }
-					console.log('Saving file to aws');
-				});
-				var params2 = {Bucket: bucketName,
-											Key: user.name + '/' + req.body.fileName,
-							 				Expires: 10*365*3600*24};
-				var AWSurl = s3.getSignedUrl('getObject', params2);
-				var newFile = new File({name: req.body.fileName, url: AWSurl});
-				newFile.save(function(error, data) {
+		fetchUser(req, res, function(err, user) {
+			var params = new setPutParams(bucketName, user.name + '/' + req.body.fileName, req.body.content);
+			s3.putObject(params, function(error, data) {
+			 if (error) {
+				res.json(errorHandler(err)('load users'));
+			 }
+				console.log('Saving file to aws');
+			});
+			var urlParams = new setUrlParams(bucketName, user.name + '/' + req.body.fileName);
+			var AWSurl = s3.getSignedUrl('getObject', urlParams);
+			var newFile = new File({name: req.body.fileName, url: AWSurl});
+			newFile.save(function(error, data) {
+				if (error) {
+				 res.json(errorHandler(err)('save reference to file'));
+					} 
+				user.update({$push: {file: data._id}}, function(err) {
 					if (error) {
-					 console.log(error);
-					 res.status(500);
-					 res.json({msg: 'Couldn\'t save file reference to database'});
-				 } 
-					user.update({$push: {file: data._id}}, function(err) {
-						if (error) {
-						 console.log(error);
-						 res.status(500);
-						 res.json({msg: 'Couldn\'t save file reference to database'});
-						}
-						else {
-							console.log('saving file to user');
-						}
-					})
-				});
-				res.json({msg: 'File is saved'});
-			}
+					 res.json(errorHandler(err)('save updated file to user'));
+					}
+					console.log('saving file to user');
+					res.json({msg: 'file is saved'});
+				})
+			})
 		})
 	})
 	.delete(function(req, res) {
 		User.update({name: req.params.user}, {$set:{file: []}}, function(err, user) {
 			if (err) {
-				res.status(500).json({msg: 'server error'});
+				res.json(errorHandler(err)('delete files of user'));
 			} 
 			else if (!user) {
 				res.send({msg:'couldn\'t find user'});
 			}
 			else {
-				
-				
+				console.log('more');
 			}
+	})
 	})
 
 //	router.route('/users/:user/files/:file')
@@ -271,9 +245,69 @@ module.exports = function(router) {
 //	.put()
 //	.delete()
 };
+
 //
+					
+
+function errorHandler(error) {
+	console.log(error);
+	return function(message){
+	return ({status: 500, msg: "server error, couldn't " + message});
+	}
+}
+
+function setParams(bucket, key) {
+	this.Bucket = bucket;
+	this.Key = key;
+}
+
+function setListParams(bucket, prefix) {
+	this.Bucket = bucket;
+	this.Prefix = prefix;
+}
+
+function setPutParams(bucketName, key, body) {
+	this.Bucket = bucketName;
+	this.Key = key,
+	this.Body = body;
+}
+
+function setDelteParams(bucket, file) {
+	this.Bucket = bucket;
+	this.Key = file.Key;
+}
+
+function setCopyParams(bucket, file) {
+	this.Bucket = bucket;
+	this.Key = file.Key;
+	this.CopySource = bucket + '/' + file.Key;
+	this.MetadataDirective = 'REPLACE'
+}
+
+function setUrlParams(bucket, key) {
+	this.Bucket = bucket;
+	this.Key = key;
+	this.Expires = 10*365*3600*24;
+}
+	
+function fetchUser(req, res, callback) {
+	User.findOne({name: req.params.user})
+	.populate('file')
+	.exec(function(err, user) { 
+		if (err) {
+			res.json(errorHandler(err)('find user'));
+		} 
+		else if (!user) {
+			res.json({msg: 'user doesn\'t exist'});
+		}
+		else {
+			callback(null, user);
+		}
+	})
+}
+
 //function fetchUser(userName, callbak) {
-//	User.find({name: userName}, callback(error, user) {
+//	User.findOne({name: userName}, callback(error, user) {
 //		if (err) {
 //			callback(error);
 //		}
@@ -284,21 +318,59 @@ module.exports = function(router) {
 //	});
 //}
 
-
-									
-//function createFile(userInfo) {
-//	var params = {Bucket: bucketName,
-//							Key: '/' + userInfo.name + '/' + req.body.fileName,
-//							 Body: req.body.content};
-//	s3.putObject(params, function(error, data) {
+//function createAwsFile(params, res) {
+//	s3.putObject(params, function(err, data) {
 //	 if (error) {
-//		 console.log(error);
-//		res.status(500);
-//		res.json({msg: 'Couldn\'t upload the file'});
+//		 console.log(err);
+//		 res.status(500);
+//		 res.json({msg: 'Couldn\'t save file'});
 //	 }
 //	 res.json({msg: 'File is saved'});
 //	})
 //};
+
+function returnAwsFilesByUser(userName, callback) {
+	var params = new setListParams(bucketName, userName);
+	s3.listObjects(params, function(err, data) {
+		if (err) {
+			callback(err);
+		}
+		else {
+			var allFiles = data.Contents;
+			callback(null, allFiles);
+		}
+	})
+}
+
+function copy_put_delete_AwsFile(oldParams, newParams, deleteParams, callback) {
+	s3.copyObject(oldParams, function(err, data) {
+		if(err) {
+			console.log('couldn\'t copy old file');
+			callback(err);
+		} else {
+			console.log('old folder successfully copied');
+			s3.putObject(newParams, function(err, data) {
+				if(err) {
+					console.log('couldn\'t save new file');
+					callback(err);
+				} else {
+					console.log('new folder successfully created');
+					s3.deleteObject(deleteParams, function(err, data) {
+						if(err) {
+							console.log('couldn\'t delete the old file');
+							callback(err);
+						} else {
+						console.log('old folder successfully deleted');
+						callback(null, data);
+						}
+					})
+				}
+			})
+		}
+	})
+}
+		
+											
 
 
 //deleteBucket(params = {}, callback)
