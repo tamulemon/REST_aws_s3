@@ -27,6 +27,8 @@ var bodyParser = require('body-parser');
 var User = require('../model/user.js');
 var File = require('../model/file.js');
 var AWS = require('aws-sdk');
+var fileDir = __dirname + '/../data/';
+var fs = require('fs');
 
 // because the requirement is updated to all users are going to share the same bucket, it is hardcoded here or can be passed through environment variable
 var bucketName = process.env.Bucket || '55b13a28b651c557054eb832';
@@ -250,6 +252,31 @@ module.exports = function(router) {
 				}
 			})	
 		});
+	})
+	.post(function(req, res) {
+		// Bonus
+		// to upload a file (binary data)
+		fetchUser(req, res, function(err, user) {
+			var s3File =  new  AWS.S3({params: {Bucket: bucketName, Key: req.params.user + '/' + req.params.file}});
+			console.log(fileDir + req.params.file);
+			var file = fs.createReadStream(fileDir + req.params.file);
+			s3File.upload({Body: file}, function() {
+				console.log('file uploaded to aws');
+				var urlParams = new setUrlParams(bucketName, req.params.user + '/' + req.params.file);
+				var AWSurl = s3.getSignedUrl('getObject', urlParams);
+				var newFile = new File({name: req.params.file, url: AWSurl});
+				newFile.save(function(error, data) {
+					if (error) {
+					 res.json(errorHandler(err)('save file to user'));
+					} else {
+						user.update({$push: {file: data._id}}, function(err) {
+							if(err) res.json(errorHandler(err)('update user'));
+							else res.json({msg: 'file is saved'});
+						})
+					}
+				})
+			})
+		})
 	})
 	.put(function(req, res) {
 		// PUT /user/:user/files/:file
