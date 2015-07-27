@@ -25,12 +25,12 @@ describe('http server', function(){
 		done();
 	});
 	
-//	after(function(done) {
-//		mongoose.connection.db.dropDatabase(function(err) {
-//			console.log('test database is dropped');
-//			done();
-//		});
-//	})
+	after(function(done) {
+		mongoose.connection.db.dropDatabase(function(err) {
+			console.log('test database is dropped');
+			done();
+		});
+	})
 	
 	it ('1. add a new user', function(done) {
 		chai.request('localhost:8080/api')
