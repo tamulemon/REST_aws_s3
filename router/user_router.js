@@ -1,20 +1,20 @@
-//GET /users - done
+//GET /users - done- pass
 //
-//POST /users - done
+//POST /users - done - pass
 //
-//GET /users/:user - done
+//GET /users/:user - done - pass
 //
-//PUT /users/:user (rename a user and user's folder) - done
+//PUT /users/:user (rename a user and user's folder) - done - pass for user without files
 //
-//DELETE /users/:user - done
+//DELETE /users/:user - done - done - pass for user without files
 //
 //GET /user/:user/files - done
 //
 //POST /user/:user/files - done
 //
-//GET /user/:user/files/:file
+//GET /user/:user/files/:file - pass
 //
-//PUT /user/:user/files/:file (replace an already existing file, or update it somehow. - done
+//PUT /user/:user/files/:file (replace an already existing file, or update it somehow. - done - pass
 //
 //DELETE /user/:user/files (deletes all files. - done
 
@@ -88,37 +88,44 @@ module.exports = function(router) {
 					var fileCompleted = 0; 
 					var total = data.length; // need to cash data.length here because there is another 'data' variable in callback scope
 					var urlParams, AWSurl;
-					data.forEach(function(file) {
-						var oldParams = new setCopyParams(bucketName, file);
-						var fileName = file.Key.split('/').pop();
-						var newParams = new setParams(bucketName, newUserName + '/' + fileName);
-						var deleteParams = new setDeleteParams(bucketName, file);
-						copy_put_delete_AwsFile(oldParams, newParams, deleteParams, function(er, data) {
-							if (er) {
-								res.json(errorHandler(err)('update user name'));
-							} else {
-								urlParams = new setUrlParams(bucketName, newUserName + '/' + fileName);
-								AWSurl = s3.getSignedUrl('getObject', urlParams);
-//								console.log(user.file);
-//								console.log(AWSurl);
-								for (var i = 0; i < user.file.length; i++) {
-									var fileToUpdate = user.file[i];
-//									console.log(fileToUpdate, fileName);
-									if (fileToUpdate.name === fileName) {
-//										console.log(user.file._id);
-										File.update({_id: fileToUpdate._id}, {$set: {url: AWSurl}}, function(err, data) {
-											if(err) errorHandler(err)('update file url');
-											else {
-												fileCompleted ++;
-												if (fileCompleted === total) res.json({msg:'user name and file update completed'});
-											}
-										});
-										break; // file name uniqiue to each user
+					if (total !== 0) {
+						data.forEach(function(file) {
+							var oldParams = new setCopyParams(bucketName, file);
+							var fileName = file.Key.split('/').pop();
+							var newParams = new setParams(bucketName, newUserName + '/' + fileName);
+							var deleteParams = new setDeleteParams(bucketName, file);
+							copy_put_delete_AwsFile(oldParams, newParams, deleteParams, function(er, data) {
+								if (er) {
+									res.json(errorHandler(err)('update user name'));
+								} else {
+									urlParams = new setUrlParams(bucketName, newUserName + '/' + fileName);
+									AWSurl = s3.getSignedUrl('getObject', urlParams);
+	//								console.log(user.file);
+	//								console.log(AWSurl);
+									for (var i = 0; i < user.file.length; i++) {
+										var fileToUpdate = user.file[i];
+	//									console.log(fileToUpdate, fileName);
+										if (fileToUpdate.name === fileName) {
+	//										console.log(user.file._id);
+											File.update({_id: fileToUpdate._id}, {$set: {url: AWSurl}}, function(err, data) {
+												if(err) errorHandler(err)('update file url');
+												else {
+													fileCompleted ++;
+													if (fileCompleted === total) res.json({msg:'user name and file update completed'});
+												}
+											});
+											break; // file name uniqiue to each user
+										}
 									}
 								}
-							}
+							})
 						})
-					})
+					} else {
+						user.update({name: newUserName}, function(err) {
+							if (err) return res.json(errorHandler(err)('update user name'));
+							res.json({msg:'user name updated'});
+						})
+					}
 				}
 			})
 		})
@@ -131,21 +138,26 @@ module.exports = function(router) {
 			user.file.forEach(function(file) {
 				fileIds.push(file._id);
 			})
-			File.remove({ _id: { $in: fileIds } }, function (err) {
-				if (err) {
-					res.json(errorHandler(err)('delete files of user'));
-				}	else {
-					deleteAllUserFiles(user.name, function(err, data) {
-						if (err) {
-							console.log(err);
-							res.json(errorHandler(err)('delete user\'s files'));
-						} else {
-							user.remove();
-							res.json({msg: 'uer and all files deleted'});
-						}
-					});
-				}
-			})
+			if (fileIds.length > 0) {
+				File.remove({ _id: { $in: fileIds } }, function (err) {
+					if (err) {
+						res.json(errorHandler(err)('delete files of user'));
+					}	else {
+						deleteAllUserFiles(user.name, function(err, data) {
+							if (err) {
+								console.log(err);
+								res.json(errorHandler(err)('delete user\'s files'));
+							} else {
+								user.remove();
+								res.json({msg: 'user and all files deleted'});
+							}
+						});
+					}
+				})
+			} else {
+					user.remove();
+					res.json({msg: 'user deleted'});
+			}
 		})
 	})
 
@@ -170,6 +182,7 @@ module.exports = function(router) {
 				// unique file name per user
 				if (user.file[i].name === req.body.fileName) { 
 					res.json({msg: 'file name already exists for this user'});
+					return;
 				}
 			}
 			var params = new setPutParams(bucketName, user.name + '/' + req.body.fileName, req.body.content);

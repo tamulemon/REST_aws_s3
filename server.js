@@ -3,7 +3,10 @@ var app = express();
 var mongoose = require('mongoose');
 var port = process.env.PORT || 8080;
 
-mongoose.connect(process.env.mongo_uri || 'mongodb://localhost/rest_aws_s3')
+
+process.env.MONGO_URL = 'mongodb://localhost/AWS_testDB'
+
+mongoose.connect(process.env.MONGO_URL || 'mongodb://localhost/rest_aws_s3')
 
 
 var apiRouter = express.Router ();
