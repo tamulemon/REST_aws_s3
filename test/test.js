@@ -5,6 +5,9 @@ var User = require('../model/user.js');
 var	File = require('../model/file.js');
 var chaiHttp = require('chai-http');
 var server = require('../server.js');
+var AWS = require('aws-sdk');
+var s3 = new AWS.S3();
+var bucketName = process.env.Bucket || '55b13a28b651c557054eb832';
 
 chai.use(chaiHttp);
 
@@ -22,12 +25,12 @@ describe('http server', function(){
 		done();
 	});
 	
-	after(function(done) {
-		mongoose.connection.db.dropDatabase(function(err) {
-			console.log('test database is dropped');
-			done();
-		});
-	})
+//	after(function(done) {
+//		mongoose.connection.db.dropDatabase(function(err) {
+//			console.log('test database is dropped');
+//			done();
+//		});
+//	})
 	
 	it ('1. add a new user', function(done) {
 		chai.request('localhost:8080/api')
@@ -74,7 +77,7 @@ describe('http server', function(){
 		});
 	});		
 		
-		it ('5. delete a user without files', function(done) {
+	it ('5. delete a user without files', function(done) {
 		chai.request('localhost:8080/api')
 		.delete('/users/test_user2')
 		.end(function (err, res) {
@@ -85,7 +88,7 @@ describe('http server', function(){
 	});		
 		
 		
-		it ('6. won\'t rename user if user does not exist', function(done) {
+	it ('6. won\'t rename user if user does not exist', function(done) {
 		chai.request('localhost:8080/api')
 		.put('/users/XYZ')
 		.send({name: 'test_user1_changed'})
@@ -115,12 +118,16 @@ describe('http server', function(){
 		.end(function (err, res) {
 		  expect(res).to.have.status(200);
 			expect(JSON.parse(res.text).msg).equal('file is saved');
-			User.find({name: 'test_user3'}, function(err, user) {
-				expect(user.file.length).gt(0);;
-			})
-			done();
-		});
-	});		
+			setTimeout(function() {
+				s3.getObject({Bucket: bucketName, Key: 'test_user3/file5'}, function(err, data) {
+					expect(err).null;
+					expect(data.body).is.not.null;
+					console.log('ok');
+					done();
+				})
+			}, 500)
+		})
+	})
 	
 	it ('8.1. stores another file to the user', function(done) {
 		chai.request('localhost:8080/api')
@@ -161,8 +168,14 @@ describe('http server', function(){
 		.end(function (err, res) {
 			expect(res).to.have.status(200);
 			expect(JSON.parse(res.text).msg).equal('user name and file update completed');
+			setTimeout(function() {
+				s3.listObjects({Bucket: bucketName, Prefix: 'test_user3_changed'}, function(err, data) {
+					expect(err).null;
+					expect(data.Contents).not.null;
+				})
+			}, 500)
 			done();
-		});
+		})
 	})
 	
 	it ('12. delete a user name and all files', function(done) {
